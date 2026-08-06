@@ -906,12 +906,21 @@ function updateSavedAtLabel(){
 (async function init(){
   const loadingState = document.getElementById('loadingState');
   const emptyStateEl = document.getElementById('emptyState');
+  const loadingMsg = loadingState.querySelector('p');
   loadingState.style.display = '';
   emptyStateEl.style.display = 'none';
 
   let data = null;
   try{
-    data = await loadFromSheets();
+    // Tenta até 3 vezes automaticamente (Apps Script pode demorar para acordar)
+    for(let t = 1; t <= 3; t++){
+      if(loadingMsg) loadingMsg.textContent = t === 1
+        ? 'Buscando dados atualizados...'
+        : `Tentativa ${t} de 3...`;
+      data = await loadFromSheets(20000);
+      if(data && data.agg && data.agg.length > 0) break;
+      if(t < 3) await new Promise(r => setTimeout(r, 2000));
+    }
   }catch(e){
     console.warn('Init error:', e);
   }
@@ -928,7 +937,6 @@ function updateSavedAtLabel(){
     dashboardContent.style.display = '';
     render();
   } else {
-    // Mostra estado vazio com opção de tentar novamente
     emptyStateEl.style.display = '';
     emptyStateEl.innerHTML = `
       <svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="21" x2="9" y2="9"/></svg>
@@ -1108,11 +1116,11 @@ function parseCPC(rows){
 }
 
 // ── Google Sheets: ler dados remotos ──────────────────────────────────────
-async function loadFromSheets(){
+async function loadFromSheets(timeoutMs=20000){
+  // Tenta carregar com timeout generoso (Apps Script pode demorar para "acordar")
   try{
-    // Timeout de 8 segundos para não ficar preso indefinidamente
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     const res = await fetch(SHEETS_URL, { signal: controller.signal });
     clearTimeout(timeoutId);
     const text = await res.text();
@@ -1122,6 +1130,18 @@ async function loadFromSheets(){
     console.warn('Sheets read error:', e);
     return null;
   }
+}
+
+async function loadFromSheetsWithRetry(maxTentativas=3){
+  for(let tentativa = 1; tentativa <= maxTentativas; tentativa++){
+    const data = await loadFromSheets(20000);
+    if(data && data.agg && data.agg.length > 0) return data;
+    if(tentativa < maxTentativas){
+      console.log(`Tentativa ${tentativa} falhou, tentando novamente...`);
+      await new Promise(r => setTimeout(r, 2000)); // espera 2s antes de tentar de novo
+    }
+  }
+  return null;
 }
 
 // ── Google Sheets: salvar dados processados ───────────────────────────────
